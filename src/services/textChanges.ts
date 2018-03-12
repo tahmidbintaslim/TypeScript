@@ -116,6 +116,11 @@ namespace ts.textChanges {
     export interface ChangeNodeOptions extends ConfigurableStartEnd, InsertNodeOptions {
         readonly useIndentationFromFile?: boolean;
     }
+
+    export interface ReplaceWithMultipleNodesOptions extends ChangeNodeOptions {
+        readonly joiner?: string;
+    }
+
     interface ReplaceWithSingleNode extends BaseChange {
         readonly kind: ChangeKind.ReplaceWithSingleNode;
         readonly node: Node;
@@ -131,7 +136,7 @@ namespace ts.textChanges {
     interface ReplaceWithMultipleNodes extends BaseChange {
         readonly kind: ChangeKind.ReplaceWithMultipleNodes;
         readonly nodes: ReadonlyArray<Node>;
-        readonly options?: ChangeNodeOptions;
+        readonly options?: ReplaceWithMultipleNodesOptions;
     }
 
     export function getSeparatorCharacter(separator: Token<SyntaxKind.CommaToken | SyntaxKind.SemicolonToken>) {
@@ -305,7 +310,7 @@ namespace ts.textChanges {
             return this.replaceRange(sourceFile, { pos, end }, newNode, options);
         }
 
-        public replaceRangeWithNodes(sourceFile: SourceFile, range: TextRange, newNodes: ReadonlyArray<Node>, options: ChangeNodeOptions = useNonAdjustedPositions) {
+        public replaceRangeWithNodes(sourceFile: SourceFile, range: TextRange, newNodes: ReadonlyArray<Node>, options: ReplaceWithMultipleNodesOptions = useNonAdjustedPositions) {
             this.changes.push({ kind: ChangeKind.ReplaceWithMultipleNodes, sourceFile, range, options, nodes: newNodes });
             return this;
         }
@@ -316,7 +321,7 @@ namespace ts.textChanges {
             return this.replaceRangeWithNodes(sourceFile, { pos, end }, newNodes, options);
         }
 
-        public replaceNodeRangeWithNodes(sourceFile: SourceFile, startNode: Node, endNode: Node, newNodes: ReadonlyArray<Node>, options: ChangeNodeOptions = useNonAdjustedPositions) {
+        public replaceNodeRangeWithNodes(sourceFile: SourceFile, startNode: Node, endNode: Node, newNodes: ReadonlyArray<Node>, options: ReplaceWithMultipleNodesOptions = useNonAdjustedPositions) {
             const pos = getAdjustedStartPosition(sourceFile, startNode, options, Position.Start);
             const end = getAdjustedEndPosition(sourceFile, endNode, options);
             return this.replaceRangeWithNodes(sourceFile, { pos, end }, newNodes, options);
@@ -327,7 +332,7 @@ namespace ts.textChanges {
             return this;
         }
 
-        private insertNodesAt(sourceFile: SourceFile, pos: number, newNodes: ReadonlyArray<Node>, options: InsertNodeOptions = {}): void {
+        private insertNodesAt(sourceFile: SourceFile, pos: number, newNodes: ReadonlyArray<Node>, options: ReplaceWithMultipleNodesOptions = {}): void {
             this.changes.push({ kind: ChangeKind.ReplaceWithMultipleNodes, sourceFile, options, nodes: newNodes, range: { pos, end: pos } });
         }
 
@@ -462,6 +467,35 @@ namespace ts.textChanges {
                 return {};
             }
             return Debug.failBadSyntaxKind(node); // We haven't handled this kind of node yet -- add it
+        }
+
+        public insertName(sourceFile: SourceFile, node: FunctionExpression | ClassExpression | ArrowFunction, name: string): void {
+            Debug.assert(!node.name);
+            if (node.kind === SyntaxKind.ArrowFunction) {
+                const arrow = findChildOfKind(node, SyntaxKind.EqualsGreaterThanToken, sourceFile)!;
+                const lparen = findChildOfKind(node, SyntaxKind.OpenParenToken, sourceFile);
+                if (lparen) {
+                    // `() => {}` --> `function f() {}`
+                    this.insertNodesAt(sourceFile, lparen.getStart(sourceFile), [createToken(SyntaxKind.FunctionKeyword), createIdentifier(name)], { joiner: " " });
+                    this.deleteNode(sourceFile, arrow);
+                }
+                else {
+                    // `x => {}` -> `function f(x) {}`
+                    this.insertNodesAt(sourceFile, first(node.parameters).getStart(sourceFile), [createToken(SyntaxKind.FunctionKeyword), createIdentifier(name + "(")], { joiner: " " });
+                    // Replaceing full range of arrow to get rid of the leading space -- replace ` =>` with `)`
+                    this.replaceRange(sourceFile, arrow, createToken(SyntaxKind.CloseParenToken));
+                }
+
+                if (node.body.kind !== SyntaxKind.Block) {
+                    // `() => 0` => `function f() { return 0; }`
+                    this.insertNodesAt(sourceFile, node.body.getStart(sourceFile), [createToken(SyntaxKind.OpenBraceToken), createToken(SyntaxKind.ReturnKeyword)], { joiner: " ", suffix: " " });
+                    this.insertNodesAt(sourceFile, node.body.end, [createToken(SyntaxKind.SemicolonToken), createToken(SyntaxKind.CloseBraceToken)], { joiner: " " });
+                }
+            }
+            else {
+                const pos = findChildOfKind(node, node.kind === SyntaxKind.FunctionExpression ? SyntaxKind.FunctionKeyword : SyntaxKind.ClassKeyword, sourceFile)!.end;
+                this.insertNodeAt(sourceFile, pos, createIdentifier(name), { prefix: " " });
+            }
         }
 
         /**
@@ -638,7 +672,7 @@ namespace ts.textChanges {
                 // order changes by start position
                 const normalized = stableSort(changesInFile, (a, b) => a.range.pos - b.range.pos);
                 // verify that change intervals do not overlap, except possibly at end points.
-                for (let i = 0; i < normalized.length - 2; i++) {
+                for (let i = 0; i < normalized.length - 1; i++) {
                     Debug.assert(normalized[i].range.end <= normalized[i + 1].range.pos, "Changes overlap", () =>
                         `${JSON.stringify(normalized[i].range)} and ${JSON.stringify(normalized[i + 1].range)}`);
                 }
@@ -656,7 +690,7 @@ namespace ts.textChanges {
             const { options = {}, range: { pos } } = change;
             const format = (n: Node) => getFormattedTextOfNode(n, sourceFile, pos, options, newLineCharacter, formatContext, validate);
             const text = change.kind === ChangeKind.ReplaceWithMultipleNodes
-                ? change.nodes.map(n => removeSuffix(format(n), newLineCharacter)).join(newLineCharacter)
+                ? change.nodes.map(n => removeSuffix(format(n), newLineCharacter)).join(change.options.joiner || newLineCharacter)
                 : format(change.node);
             // strip initial indentation (spaces or tabs) if text will be inserted in the middle of the line
             const noIndent = (options.preserveLeadingWhitespace || options.indentation !== undefined || getLineStartPositionForPosition(pos, sourceFile) === pos) ? text : text.replace(/^\s+/, "");

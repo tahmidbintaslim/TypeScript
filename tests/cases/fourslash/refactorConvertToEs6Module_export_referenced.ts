@@ -30,6 +30,6 @@ _y;
 const _z = 2;
 export { _z as z };
 export function f(z) {
-        _z  z;
+    _z; z;
 }`,
 });
