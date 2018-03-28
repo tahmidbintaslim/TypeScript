@@ -200,6 +200,7 @@ declare namespace FourSlashInterface {
     class verify extends verifyNegatable {
         assertHasRanges(ranges: Range[]): void;
         caretAtMarker(markerName?: string): void;
+        completions: any; //todo
         completionsAt(markerName: string | ReadonlyArray<string>, completions: ReadonlyArray<string | { name: string, insertText?: string, replacementSpan?: Range }>, options?: CompletionsAtOptions): void;
         completionsAndDetailsAt(
             markerName: string,

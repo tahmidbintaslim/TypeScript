@@ -832,6 +832,34 @@ namespace FourSlash {
             }
         }
 
+        public verifyCompletions(options: FourSlashInterface.CompletionsOptions) {
+            if (!options.at) {
+                this.verifyCompletionsWorker(options);
+            }
+            else if (typeof options.at === "string") {
+                this.goToMarker(options.at);
+                this.verifyCompletionsWorker(options);
+            }
+            else {
+                for (const markerName of options.at) {
+                    this.goToMarker(markerName);
+                    this.verifyCompletionsWorker(options);
+                }
+            }
+        }
+
+        private verifyCompletionsWorker(options: FourSlashInterface.CompletionsOptions) {
+            const actualCompletions = this.getCompletionListAtCaret(options);
+            if (options.all) {
+                this.verifyAllCompletions(actualCompletions, options.all);
+            }
+            else {
+                for (const o of options.contains) {
+                    assert(actualCompletions.entries.some(e => e.name === o), `Expected completions to contain '${o}'`);
+                }
+            }
+        }
+
         public verifyCompletionsAt(markerName: string | ReadonlyArray<string>, expected: ReadonlyArray<FourSlashInterface.ExpectedCompletionEntry>, options?: FourSlashInterface.CompletionsAtOptions) {
             if (typeof markerName !== "string") {
                 for (const m of markerName) this.verifyCompletionsAt(m, expected, options);
@@ -841,6 +869,10 @@ namespace FourSlash {
             this.goToMarker(markerName);
 
             const actualCompletions = this.getCompletionListAtCaret(options);
+            this.verifyAllCompletions(actualCompletions, expected, options);
+        }
+
+        private verifyAllCompletions(actualCompletions: ts.CompletionInfo, expected: ReadonlyArray<FourSlashInterface.ExpectedCompletionEntry>, options?: FourSlashInterface.CompletionsAtOptions) {
             if (!actualCompletions) {
                 this.raiseError(`No completions at position '${this.currentCaretPosition}'.`);
             }
@@ -3997,6 +4029,10 @@ namespace FourSlashInterface {
             this.state.verifyCompletionsAt(markerName, completions, options);
         }
 
+        public completions(options: CompletionsOptions): void {
+            this.state.verifyCompletions(options);
+        }
+
         public quickInfoIs(expectedText: string, expectedDocumentation?: string) {
             this.state.verifyQuickInfoString(expectedText, expectedDocumentation);
         }
@@ -4630,6 +4666,12 @@ namespace FourSlashInterface {
     export type ExpectedCompletionEntry = string | { name: string, insertText?: string, replacementSpan?: FourSlash.Range };
     export interface CompletionsAtOptions extends Partial<ts.UserPreferences> {
         isNewIdentifierLocation?: boolean;
+    }
+
+    export interface CompletionsOptions extends Partial<ts.UserPreferences> {
+        at?: string | ReadonlyArray<string>;
+        all?: ReadonlyArray<ExpectedCompletionEntry>;
+        contains?: ReadonlyArray<ExpectedCompletionEntry>;
     }
 
     export interface VerifyCompletionListContainsOptions extends ts.UserPreferences {
